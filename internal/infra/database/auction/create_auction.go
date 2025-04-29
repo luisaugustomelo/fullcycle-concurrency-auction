@@ -5,7 +5,10 @@ import (
 	"fullcycle-auction_go/configuration/logger"
 	"fullcycle-auction_go/internal/entity/auction_entity"
 	"fullcycle-auction_go/internal/internal_error"
+	"os"
+	"time"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -46,5 +49,33 @@ func (ar *AuctionRepository) CreateAuction(
 		return internal_error.NewInternalServerError("Error trying to insert auction")
 	}
 
+	go func() {
+		timer := time.NewTimer(getAuctionClosureInterval())
+		defer timer.Stop()
+
+		select {
+		case <-timer.C:
+			_, err := ar.Collection.UpdateOne(ctx, bson.M{
+				"_id": auctionEntityMongo.Id,
+			}, bson.M{
+				"$set": bson.M{"status": auction_entity.Completed},
+			})
+			if err != nil {
+				logger.Error("failed to update auction status", err)
+			}
+		case <-ctx.Done():
+			logger.Info("auction closure canceled by context")
+		}
+	}()
+
 	return nil
+}
+
+func getAuctionClosureInterval() time.Duration {
+	intervalStr := os.Getenv("AUCTION_INTERVAL")
+	if d, err := time.ParseDuration(intervalStr); err == nil {
+		return d
+	}
+	logger.Info("Invalid or missing AUCTION_INTERVAL, defaulting to 10s")
+	return 10 * time.Second
 }
